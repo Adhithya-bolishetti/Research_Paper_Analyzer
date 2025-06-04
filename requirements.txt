@@ -1,0 +1,8 @@
+streamlit
+PyMuPDF
+python-docx
+pdfplumber
+sentence-transformers
+chromadb
+requests
+google-generativeai
