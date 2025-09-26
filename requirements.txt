@@ -7,3 +7,5 @@ sentence-transformers
 chromadb
 requests
 google-generativeai
+langchain
+faiss-cpu
