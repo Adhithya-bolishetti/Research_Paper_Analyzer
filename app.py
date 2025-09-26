@@ -3,12 +3,14 @@ import uuid
 import streamlit as st
 from fpdf import FPDF
 from docx import Document
-import fitz  # PyMuPDF
+import fitz
 from sentence_transformers import SentenceTransformer
+import faiss
 from langchain.vectorstores import FAISS
+from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.question_answering import load_qa_chain
-from langchain.llms import OpenAI  # Or replace with any local LLM if available
+from langchain.llms import OpenAI
 from langchain.prompts import PromptTemplate
 
 # ---------- Global Setup ----------
@@ -16,9 +18,10 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Local embedding model
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+local_embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+embeddings_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# ---------- Utility Functions ----------
+# ---------- Utilities ----------
 def save_text_as_pdf(text: str, filename: str):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -46,15 +49,10 @@ def chunk_text(text, chunk_size=500, chunk_overlap=50):
     return splitter.split_text(text)
 
 def create_vector_store(chunks):
-    embeddings = [embed_model.encode(chunk).tolist() for chunk in chunks]
-    vector_store = FAISS.from_texts(chunks, embeddings)
-    return vector_store
+    return FAISS.from_texts(chunks, embeddings_model)
 
 def generate_research_paper(topic: str, min_words=1000):
-    """
-    Simple text generator using OpenAI LLM (replace with your preferred LLM)
-    """
-    llm = OpenAI(temperature=0.3)  # replace with your local or API-based LLM
+    llm = OpenAI(temperature=0.3)  # Replace with your LLM
     prompt_template = """
     Write a detailed academic research paper on the topic: "{topic}".
     Include Abstract, Introduction, Related Work, Methodology, Experiments, Results, Discussion, Conclusion.
@@ -91,7 +89,8 @@ def main():
     with tab_pdf:
         st.header("Upload PDF/DOCX and Ask Questions")
         uploaded_files = st.file_uploader("Upload PDF or DOCX files", type=["pdf","docx"], accept_multiple_files=True)
-        if uploaded_files:
+        question = st.text_input("Ask a question about the uploaded files:")
+        if uploaded_files and question:
             all_chunks = []
             for file in uploaded_files:
                 ext = file.name.split('.')[-1].lower()
@@ -104,22 +103,21 @@ def main():
                     text = extract_text_from_docx(temp_path)
                 chunks = chunk_text(text)
                 all_chunks.extend(chunks)
+
             if all_chunks:
                 vector_store = create_vector_store(all_chunks)
                 st.success("Files processed and vector store created!")
 
-                question = st.text_input("Ask a question about the uploaded files:")
-                if question:
-                    docs = vector_store.similarity_search(question, k=5)
-                    llm = OpenAI(temperature=0)  # Replace with preferred LLM
-                    prompt = PromptTemplate(
-                        template="Answer the question based on the context below.\nContext:\n{context}\nQuestion: {question}\nAnswer:",
-                        input_variables=["context","question"]
-                    )
-                    chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
-                    answer = chain.run({"input_documents": docs, "question": question})
-                    st.write("**Answer:**")
-                    st.write(answer)
+                docs = vector_store.similarity_search(question, k=5)
+                llm = OpenAI(temperature=0)
+                prompt = PromptTemplate(
+                    template="Answer the question based on the context below.\nContext:\n{context}\nQuestion: {question}\nAnswer:",
+                    input_variables=["context","question"]
+                )
+                chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
+                answer = chain.run({"input_documents": docs, "question": question})
+                st.write("**Answer:**")
+                st.write(answer)
 
 if __name__ == "__main__":
     main()
