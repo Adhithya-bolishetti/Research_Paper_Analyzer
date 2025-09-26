@@ -92,6 +92,16 @@ def chunk_text_improved(text, max_chunk_chars=1000, overlap_chars=200):
         chunks.append(current_chunk.strip())
     return chunks
 
+# ---------- PDF Save ----------
+def save_text_as_pdf(text: str, filename: str):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Times", size=12)
+    for line in text.split('\n'):
+        pdf.multi_cell(0, 10, line)
+    pdf.output(filename)
+
 # ---------- Processing Uploaded Files ----------
 def process_file(uploaded_file, batch_size=64):
     file_extension = os.path.splitext(uploaded_file.name)[1]
@@ -178,11 +188,7 @@ def search_documents(query, top_k=5):
 
 # ---------- LLM Call ----------
 def call_llm(context, question):
-    api_key = st.secrets.get("OPENROUTER_API_KEY")
-    if not api_key:
-        st.error("OpenRouter API key not provided in secrets.")
-        return "API Key Missing"
-
+    api_key = st.secrets["OPENROUTER_API_KEY"]
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -205,39 +211,29 @@ def call_llm(context, question):
 
 # ---------- Research Paper Generator ----------
 def generate_research_paper(topic, min_words=1000):
-    api_key = st.secrets.get("OPENROUTER_API_KEY")
-    if not api_key:
-        st.error("OpenRouter API key not provided in secrets.")
-        return "API Key Missing"
-    
-    prompt = (
-        f"Write a detailed academic research paper on '{topic}'. "
-        f"Include Abstract, Introduction, Related Work, Methodology, Experiments, Results, Discussion, and Conclusion. "
-        f"Use formal language and make it at least {min_words} words."
-    )
-    url = "https://openrouter.ai/api/v1/completions"
+    api_key = st.secrets["OPENROUTER_API_KEY"]
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    prompt = f"""
+    Write a detailed, structured research paper on the topic: "{topic}".
+    Include Abstract, Introduction, Related Work, Methodology, Experiments, Results, Discussion, and Conclusion.
+    The paper should be technical, academic, and at least {min_words} words.
+    Use formal language and cite imaginary references as needed.
+    """
+    data = {
+        "model": "qwen/qwq-32b:free",
+        "messages": [{"role": "user", "content": prompt}]
+    }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    data = {"model": "qwen/qwq-32b:free", "prompt": prompt, "max_tokens": 4000}
-    try:
-        response = requests.post(url, headers=headers, data=json.dumps(data))
-        if response.status_code == 200:
-            return response.json()["choices"][0]["text"]
-        return f"Error from API: {response.status_code}, {response.text}"
-    except Exception as e:
-        return f"Request failed: {e}"
-
-def save_text_as_pdf(text, filename):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Times", size=12)
-    for line in text.split('\n'):
-        pdf.multi_cell(0, 10, line)
-    pdf.output(filename)
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+    else:
+        st.error(f"Error generating paper: {response.status_code}, {response.text}")
+        return ""
 
 # ---------- Streamlit App ----------
 def main():
-    st.title("AI Research Paper Tool")
+    st.title("AI Research Paper & PDF Chat Tool")
 
     if "processed_files" not in st.session_state:
         st.session_state["processed_files"] = load_processed_files()
@@ -248,58 +244,46 @@ def main():
     with tab_generator:
         st.header("Generate Research Paper")
         topic = st.text_input("Enter your research paper topic:")
-        min_words = st.slider("Minimum words (approx)", 1000, 8000, 3000, step=500)
+        min_words = st.slider("Minimum words (approx)", 500, 5000, 1500, step=100)
         if st.button("Generate Paper"):
             if not topic.strip():
                 st.warning("Please enter a topic.")
             else:
                 with st.spinner("Generating research paper..."):
                     paper_text = generate_research_paper(topic, min_words)
-                    pdf_filename = f"{uuid.uuid4().hex}_research_paper.pdf"
-                    save_text_as_pdf(paper_text, pdf_filename)
-                    st.success("Research paper generated!")
-                    st.download_button("Download PDF", data=open(pdf_filename, "rb").read(), file_name=pdf_filename)
+                    if paper_text:
+                        pdf_filename = f"{uuid.uuid4().hex}_research_paper.pdf"
+                        save_text_as_pdf(paper_text, pdf_filename)
+                        st.success("Paper generated!")
+                        st.download_button("Download PDF", data=open(pdf_filename, "rb").read(), file_name=pdf_filename)
 
-    # --- Upload & Chat Tab ---
+    # --- Upload & Chat with PDF Tab ---
     with tab_chat:
-        st.header("Upload PDFs/DOCs and Chat")
-        uploaded_files = st.file_uploader("Upload PDF or DOCX", type=["pdf","doc","docx"], accept_multiple_files=True)
+        st.header("Upload & Chat with PDF")
+        uploaded_files = st.file_uploader("Upload PDF/DOCX files", type=["pdf", "docx"], accept_multiple_files=True)
         if uploaded_files:
-            for uploaded_file in uploaded_files:
-                if uploaded_file.name not in st.session_state["processed_files"]:
-                    unique_filename = process_file(uploaded_file)
+            for file in uploaded_files:
+                if file.name not in st.session_state["processed_files"]:
+                    unique_filename = process_file(file)
                     if unique_filename:
-                        st.success(f"Uploaded and processed: {uploaded_file.name}")
-                        st.session_state["processed_files"][uploaded_file.name] = unique_filename
+                        st.success(f"Processed: {file.name}")
+                        st.session_state["processed_files"][file.name] = unique_filename
                         save_processed_files(st.session_state["processed_files"])
 
-        st.subheader("Uploaded Files")
-        processed_files = st.session_state.get("processed_files", {})
-        if processed_files:
-            for original_name, unique_filename in list(processed_files.items()):
-                st.write(f"**{original_name}**")
-                if st.button(f"Delete {original_name}", key=f"delete_{unique_filename}"):
-                    delete_file(unique_filename)
-                    del st.session_state["processed_files"][original_name]
-                    save_processed_files(st.session_state["processed_files"])
-        else:
-            st.info("No files uploaded yet.")
-
-        st.subheader("Ask a Question from Uploaded Docs")
+        st.subheader("Ask a Question")
         query = st.text_input("Enter your question:")
         if st.button("Get Answer"):
             if query:
                 search_results = search_documents(query)
                 if search_results:
                     context = "\n\n".join([doc for _, doc, _ in search_results[:5]])
-                else:
-                    context = ""
-                if context:
                     answer = call_llm(context, query)
                     st.write("**Answer:**")
                     st.write(answer)
                 else:
                     st.warning("No relevant content found.")
+            else:
+                st.warning("Please enter a question.")
 
 if __name__ == "__main__":
     main()
