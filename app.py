@@ -32,10 +32,10 @@ embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # ---------- Configure Google API ----------
 GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-else:
+api_key = st.secrets.get("GOOGLE_API_KEY")
+if not api_key:
     st.error("Google API Key missing! Check secrets.toml")
+
 
 # ---------- Persistence Functions ----------
 def load_processed_files():
