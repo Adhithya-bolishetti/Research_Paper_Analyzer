@@ -2,8 +2,8 @@
 
 This project provides tools for generating, uploading, and analyzing research papers using AI-powered language models and vector search. It features two main applications:
 
-- **main.py**: A Streamlit app for generating research papers with Gemini, uploading PDFs, and chatting with their content.
-- **RAG/rag.py**: A Streamlit app for uploading, chunking, embedding, and querying research papers using ChromaDB and OpenRouter LLMs.
+- **app.py**: A Streamlit app for generating research papers with Gemini, uploading PDFs, and chatting with their content.
+- **rag.py**: A Streamlit app for uploading, chunking, embedding, and querying research papers using ChromaDB and OpenRouter LLMs.
 
 ## Features
 
@@ -17,13 +17,11 @@ This project provides tools for generating, uploading, and analyzing research pa
 
 ```
 .
-├── .env
-├── main.py
-├── requirements.txt
-└── RAG/
-    ├── rag.py
-    └── .streamlit/
-        └── secrets.toml
+├── secrets.toml
+├── app.py
+├── rag.py
+└── requirements.txt
+
 ```
 
 ## Setup
@@ -36,20 +34,20 @@ This project provides tools for generating, uploading, and analyzing research pa
     ```
 
 3. **Set up API keys**:
-    - Add your Google API key to `.env`:
+    - Add your Google API key to `secrets.toml`:
       ```
       GOOGLE_API_KEY=your_google_api_key
       ```
-    - Add your OpenRouter API key and site info to `RAG/.streamlit/secrets.toml`.
+    - Add your OpenRouter API key and site info to `secrets.toml`.
 
 4. **Run the apps**:
     - For the main analyzer:
       ```sh
-      streamlit run main.py
+      streamlit run app.py
       ```
     - For the RAG app:
       ```sh
-      streamlit run RAG/rag.py
+      streamlit run rag.py
       ```
 
 ## Usage
