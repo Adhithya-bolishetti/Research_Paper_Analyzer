@@ -1,13 +1,14 @@
 import os
 import uuid
 import json
+import requests
 import streamlit as st
-from fpdf import FPDF
 from pathlib import Path
+from fpdf import FPDF
 
 # --- Document Extraction Libraries ---
-import fitz  # PyMuPDF
-from docx import Document
+import fitz  # PyMuPDF for PDF extraction
+from docx import Document  # DOCX extraction
 try:
     import pdfplumber
     USE_PDFPLUMBER = True
@@ -20,11 +21,6 @@ from sentence_transformers import SentenceTransformer
 # --- ChromaDB ---
 from chromadb import Client
 from chromadb.config import Settings
-
-# --- LLM for paper generation ---
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import PromptTemplate
-from langchain.chains.llm import LLMChain
 
 # ---------- Global Setup ----------
 UPLOAD_DIR = "uploads"
@@ -59,7 +55,12 @@ def extract_text_from_pdf(file_path):
             with pdfplumber.open(file_path) as pdf:
                 for page in pdf.pages:
                     page_text = page.extract_text() or ""
-                    full_text += page_text + "\n"
+                    table_text = ""
+                    tables = page.extract_tables() or []
+                    for table in tables:
+                        for row in table:
+                            table_text += "\t".join([str(cell) for cell in row if cell]) + "\n"
+                    full_text += page_text + "\n" + table_text + "\n"
         except Exception:
             full_text = extract_text_from_pdf_pymupdf(file_path)
     else:
@@ -97,9 +98,11 @@ def process_file(uploaded_file, batch_size=64):
     unique_filename = f"{uuid.uuid4().hex}{file_extension}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
     
+    # Save uploaded file
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
+    # Extract text
     if file_extension.lower() == ".pdf":
         text = extract_text_from_pdf(file_path)
     elif file_extension.lower() in [".doc", ".docx"]:
@@ -112,13 +115,20 @@ def process_file(uploaded_file, batch_size=64):
         st.warning(f"No text could be extracted from {uploaded_file.name}.")
         return None
 
+    # Chunk text
     chunks = chunk_text_improved(text)
+    if not chunks:
+        st.warning("The extracted text is empty after chunking.")
+        return None
+
+    # Batch embeddings
     embeddings = []
     for i in range(0, len(chunks), batch_size):
         batch_chunks = chunks[i:i + batch_size]
         batch_embeddings = embed_model.encode(batch_chunks).tolist()
         embeddings.extend(batch_embeddings)
 
+    # Handle existing collection
     existing_collections = [c.name for c in chroma_client.list_collections()]
     if unique_filename in existing_collections:
         collection = chroma_client.get_collection(name=unique_filename)
@@ -139,61 +149,121 @@ def delete_file(unique_filename):
     except Exception as e:
         st.warning(f"Error deleting collection: {e}")
 
-# ---------- Research Paper Generator ----------
-def generate_research_paper(topic: str, min_words: int) -> str:
-    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.3)
-    prompt_template = """
-    Write a detailed, structured research paper on the topic: "{topic}".
-    Include Abstract, Introduction, Related Work, Methodology, Experiments, Results, Discussion, and Conclusion sections.
-    Each section should be academic and at least {min_words} words.
-    Use formal language and cite imaginary references as needed.
-    """
-    prompt = PromptTemplate(template=prompt_template, input_variables=["topic", "min_words"])
-    chain = LLMChain(llm=model, prompt=prompt)
-    paper_text = chain.run({"topic": topic, "min_words": min_words})
-    return paper_text
+# ---------- Search ----------
+def search_documents(query, top_k=5):
+    results = []
+    try:
+        collections = chroma_client.list_collections()
+    except Exception as e:
+        st.error(f"Failed to list collections: {e}")
+        return results
 
-def save_text_as_pdf(text: str, filename: str):
+    if not collections:
+        st.info("No documents uploaded yet.")
+        return results
+
+    for col in collections:
+        try:
+            coll = chroma_client.get_collection(name=col.name)
+            search_result = coll.query(query_texts=[query], n_results=top_k)
+            docs = search_result.get("documents", [[]])[0]
+            distances = search_result.get("distances", [[]])[0]
+            for doc, dist in zip(docs, distances):
+                results.append((col.name, doc, dist))
+        except Exception as e:
+            st.warning(f"Error querying collection '{col.name}': {e}")
+
+    results.sort(key=lambda x: x[2])
+    return results
+
+# ---------- LLM Call ----------
+def call_llm(context, question):
+    api_key = st.secrets.get("OPENROUTER_API_KEY")
+    if not api_key:
+        st.error("OpenRouter API key not provided in secrets.")
+        return "API Key Missing"
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    message = (
+        "You are an AI assistant that answers questions solely based on the provided context from uploaded documents. "
+        "If the context does not contain relevant information, respond: 'No relevant information found in the provided documents.'\n\n"
+        f"Context:\n{context}\n\n"
+        f"Question: {question}"
+    )
+    data = {"model": "qwen/qwq-32b:free", "messages": [{"role": "user", "content": message}]}
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+        return f"Error from API: {response.status_code}, {response.text}"
+    except Exception as e:
+        return f"Request failed: {e}"
+
+# ---------- Research Paper Generator ----------
+def generate_research_paper(topic, min_words=1000):
+    api_key = st.secrets.get("OPENROUTER_API_KEY")
+    if not api_key:
+        st.error("OpenRouter API key not provided in secrets.")
+        return "API Key Missing"
+    
+    prompt = (
+        f"Write a detailed academic research paper on '{topic}'. "
+        f"Include Abstract, Introduction, Related Work, Methodology, Experiments, Results, Discussion, and Conclusion. "
+        f"Use formal language and make it at least {min_words} words."
+    )
+    url = "https://openrouter.ai/api/v1/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    data = {"model": "qwen/qwq-32b:free", "prompt": prompt, "max_tokens": 4000}
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        if response.status_code == 200:
+            return response.json()["choices"][0]["text"]
+        return f"Error from API: {response.status_code}, {response.text}"
+    except Exception as e:
+        return f"Request failed: {e}"
+
+def save_text_as_pdf(text, filename):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Times", size=12)
-    for line in text.split("\n"):
+    for line in text.split('\n'):
         pdf.multi_cell(0, 10, line)
     pdf.output(filename)
 
-def research_paper_tab():
-    st.header("Research Paper Generator")
-    topic = st.text_input("Enter the research paper topic:")
-    min_words = st.slider("Minimum words per section", 300, 2000, 500, step=50)
-
-    if st.button("Generate Paper"):
-        if not topic.strip():
-            st.warning("Please enter a valid topic.")
-            return
-        with st.spinner("Generating research paper, please wait..."):
-            paper_text = generate_research_paper(topic, min_words)
-            pdf_filename = f"{topic.replace(' ','_')}_research_paper.pdf"
-            save_text_as_pdf(paper_text, pdf_filename)
-        st.success("Research paper generated successfully!")
-        st.download_button("Download PDF", data=open(pdf_filename, "rb").read(), file_name=pdf_filename)
-        st.subheader("Paper Preview")
-        st.text_area("Paper Content", value=paper_text, height=400)
-
-# ---------- Streamlit Main ----------
+# ---------- Streamlit App ----------
 def main():
     st.title("AI Research Paper Tool")
-    tab_generate, tab_chat = st.tabs(["Research Paper Generator", "Upload & Chat with PDF"])
 
-    with tab_generate:
-        research_paper_tab()
+    if "processed_files" not in st.session_state:
+        st.session_state["processed_files"] = load_processed_files()
 
+    tab_generator, tab_chat = st.tabs(["Research Paper Generator", "Upload & Chat with PDF"])
+
+    # --- Research Paper Generator Tab ---
+    with tab_generator:
+        st.header("Generate Research Paper")
+        topic = st.text_input("Enter your research paper topic:")
+        min_words = st.slider("Minimum words (approx)", 1000, 8000, 3000, step=500)
+        if st.button("Generate Paper"):
+            if not topic.strip():
+                st.warning("Please enter a topic.")
+            else:
+                with st.spinner("Generating research paper..."):
+                    paper_text = generate_research_paper(topic, min_words)
+                    pdf_filename = f"{uuid.uuid4().hex}_research_paper.pdf"
+                    save_text_as_pdf(paper_text, pdf_filename)
+                    st.success("Research paper generated!")
+                    st.download_button("Download PDF", data=open(pdf_filename, "rb").read(), file_name=pdf_filename)
+
+    # --- Upload & Chat Tab ---
     with tab_chat:
-        st.header("Upload & Chat with PDF")
-        if "processed_files" not in st.session_state:
-            st.session_state["processed_files"] = load_processed_files()
-
-        uploaded_files = st.file_uploader("Upload PDF/DOCX files", type=["pdf","doc","docx"], accept_multiple_files=True)
+        st.header("Upload PDFs/DOCs and Chat")
+        uploaded_files = st.file_uploader("Upload PDF or DOCX", type=["pdf","doc","docx"], accept_multiple_files=True)
         if uploaded_files:
             for uploaded_file in uploaded_files:
                 if uploaded_file.name not in st.session_state["processed_files"]:
@@ -203,23 +273,33 @@ def main():
                         st.session_state["processed_files"][uploaded_file.name] = unique_filename
                         save_processed_files(st.session_state["processed_files"])
 
-        st.subheader("Ask Questions from Uploaded Files")
+        st.subheader("Uploaded Files")
+        processed_files = st.session_state.get("processed_files", {})
+        if processed_files:
+            for original_name, unique_filename in list(processed_files.items()):
+                st.write(f"**{original_name}**")
+                if st.button(f"Delete {original_name}", key=f"delete_{unique_filename}"):
+                    delete_file(unique_filename)
+                    del st.session_state["processed_files"][original_name]
+                    save_processed_files(st.session_state["processed_files"])
+        else:
+            st.info("No files uploaded yet.")
+
+        st.subheader("Ask a Question from Uploaded Docs")
         query = st.text_input("Enter your question:")
         if st.button("Get Answer"):
             if query:
-                results = []
-                for col in chroma_client.list_collections():
-                    collection = chroma_client.get_collection(name=col.name)
-                    search_result = collection.query(query_texts=[query], n_results=5)
-                    docs = search_result.get("documents", [[]])[0]
-                    results.extend(docs)
-                context = "\n\n".join(results[:5])
-                if not context:
-                    st.warning("No relevant information found.")
+                search_results = search_documents(query)
+                if search_results:
+                    context = "\n\n".join([doc for _, doc, _ in search_results[:5]])
                 else:
+                    context = ""
+                if context:
                     answer = call_llm(context, query)
                     st.write("**Answer:**")
                     st.write(answer)
+                else:
+                    st.warning("No relevant content found.")
 
 if __name__ == "__main__":
     main()
