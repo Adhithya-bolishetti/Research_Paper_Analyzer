@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 # google_api_key = os.getenv("GOOGLE_API_KEY")
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+api_key = st.secrets.get("GOOGLE_API_KEY")
 # genai.configure(api_key=google_api_key)
 
 def generate_long_research_paper(topic: str, min_words=3000) -> str:
