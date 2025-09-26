@@ -17,7 +17,7 @@ This project provides tools for generating, uploading, and analyzing research pa
 
 ```
 .
-├── .secrets.toml
+├── secrets.toml
 ├── app.py
 ├── rag.py
 └── requirements.txt
@@ -34,7 +34,7 @@ This project provides tools for generating, uploading, and analyzing research pa
     ```
 
 3. **Set up API keys**:
-    - Add your Google API key to `.env`:
+    - Add your Google API key to `secrets.toml`:
       ```
       GOOGLE_API_KEY=your_google_api_key
       ```
