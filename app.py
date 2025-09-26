@@ -59,15 +59,24 @@ def get_text_chunks(text):
     return splitter.split_text(text)
 
 # ----------------- Vector Store -----------------
-def create_vector_store(chunks):
+def create_vector_store(chunks, batch_size=5):
     try:
-        embeddings = GoogleGenerativeAIEmbeddings(model="textembedding-gecko-001", api_key=GOOGLE_API_KEY)
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="textembedding-gecko-001",
+            api_key=GOOGLE_API_KEY
+        )
+        all_embeddings = []
+        for i in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[i:i+batch_size]
+            batch_embeds = embeddings.embed_documents(batch_chunks)
+            all_embeddings.extend(batch_embeds)
         vector_store = FAISS.from_texts(chunks, embedding=embeddings)
         vector_store.save_local("faiss_index")
         return vector_store
     except Exception as e:
         st.error(f"Error creating vector store: {e}")
         return None
+
 
 def load_vector_store():
     embeddings = GoogleGenerativeAIEmbeddings(model="textembedding-gecko-001", api_key=GOOGLE_API_KEY)
