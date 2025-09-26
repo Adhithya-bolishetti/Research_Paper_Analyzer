@@ -4,7 +4,6 @@ import json
 import requests
 import streamlit as st
 from pathlib import Path
-from fpdf import FPDF
 
 # --- Document Extraction Libraries ---
 import fitz  # PyMuPDF for PDF extraction
@@ -22,12 +21,22 @@ from sentence_transformers import SentenceTransformer
 from chromadb import Client
 from chromadb.config import Settings
 
+# --- Google Generative AI ---
+import google.generativeai as genai
+
 # ---------- Global Setup ----------
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 PERSISTENCE_FILE = "processed_files.json"
 chroma_client = Client(Settings())
 embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+# ---------- Google API Key ----------
+GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
+else:
+    st.warning("Google API Key not found in secrets.toml")
 
 # ---------- Persistence Functions ----------
 def load_processed_files():
@@ -92,27 +101,15 @@ def chunk_text_improved(text, max_chunk_chars=1000, overlap_chars=200):
         chunks.append(current_chunk.strip())
     return chunks
 
-# ---------- PDF Save ----------
-def save_text_as_pdf(text: str, filename: str):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Times", size=12)
-    for line in text.split('\n'):
-        pdf.multi_cell(0, 10, line)
-    pdf.output(filename)
-
 # ---------- Processing Uploaded Files ----------
 def process_file(uploaded_file, batch_size=64):
     file_extension = os.path.splitext(uploaded_file.name)[1]
     unique_filename = f"{uuid.uuid4().hex}{file_extension}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
     
-    # Save uploaded file
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # Extract text
     if file_extension.lower() == ".pdf":
         text = extract_text_from_pdf(file_path)
     elif file_extension.lower() in [".doc", ".docx"]:
@@ -125,20 +122,17 @@ def process_file(uploaded_file, batch_size=64):
         st.warning(f"No text could be extracted from {uploaded_file.name}.")
         return None
 
-    # Chunk text
     chunks = chunk_text_improved(text)
     if not chunks:
         st.warning("The extracted text is empty after chunking.")
         return None
 
-    # Batch embeddings
     embeddings = []
     for i in range(0, len(chunks), batch_size):
         batch_chunks = chunks[i:i + batch_size]
         batch_embeddings = embed_model.encode(batch_chunks).tolist()
         embeddings.extend(batch_embeddings)
 
-    # Handle existing collection
     existing_collections = [c.name for c in chroma_client.list_collections()]
     if unique_filename in existing_collections:
         collection = chroma_client.get_collection(name=unique_filename)
@@ -186,92 +180,72 @@ def search_documents(query, top_k=5):
     results.sort(key=lambda x: x[2])
     return results
 
-# ---------- LLM Call ----------
-def call_llm(context, question):
-    api_key = st.secrets.get("OPENROUTER_API_KEY")
-    if not api_key:
-        st.error("OpenRouter API key is missing in secrets.toml")
-        return "API Key Missing"
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    message = (
-        "You are an AI assistant that answers questions solely based on the provided context from uploaded documents. "
-        "If the context does not contain relevant information, respond: 'No relevant information found in the provided documents.'\n\n"
-        f"Context:\n{context}\n\n"
-        f"Question: {question}"
-    )
-    data = {"model": "qwen/qwq-32b:free", "messages": [{"role": "user", "content": message}]}
-    try:
-        response = requests.post(url, headers=headers, data=json.dumps(data))
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        return f"Error from API: {response.status_code}, {response.text}"
-    except Exception as e:
-        return f"Request failed: {e}"
-
-# ---------- Research Paper Generator ----------
-def generate_research_paper(topic, min_words=1000):
-    api_key = st.secrets["OPENROUTER_API_KEY"]
-    url = "https://openrouter.ai/api/v1/chat/completions"
+# ---------- Google LLM Call for Research Paper ----------
+def generate_research_paper(topic, min_words=3000):
+    if not GOOGLE_API_KEY:
+        return "Google API Key missing"
     prompt = f"""
-    Write a detailed, structured research paper on the topic: "{topic}".
+    Write a detailed academic research paper on the topic: "{topic}".
     Include Abstract, Introduction, Related Work, Methodology, Experiments, Results, Discussion, and Conclusion.
-    The paper should be technical, academic, and at least {min_words} words.
-    Use formal language and cite imaginary references as needed.
+    The paper should be at least {min_words} words.
+    Use formal language and cite imaginary references if needed.
     """
-    data = {
-        "model": "qwen/qwq-32b:free",
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    response = requests.post(url, headers=headers, data=json.dumps(data))
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-    else:
-        st.error(f"Error generating paper: {response.status_code}, {response.text}")
-        return ""
+    try:
+        response = genai.chat.create(
+            model="gemini-1.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        return response.last
+    except Exception as e:
+        return f"Error generating paper: {e}"
+
+def save_text_as_pdf(text, filename):
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Times", size=12)
+    for line in text.split("\n"):
+        pdf.multi_cell(0, 10, line)
+    pdf.output(filename)
 
 # ---------- Streamlit App ----------
 def main():
-    st.title("AI Research Paper & PDF Chat Tool")
+    st.title("AI Research Paper & PDF Analyzer")
 
     if "processed_files" not in st.session_state:
         st.session_state["processed_files"] = load_processed_files()
 
-    tab_generator, tab_chat = st.tabs(["Research Paper Generator", "Upload & Chat with PDF"])
+    tab_generate, tab_chat = st.tabs(["Research Paper Generator", "Upload & Chat with PDF"])
 
     # --- Research Paper Generator Tab ---
-    with tab_generator:
-        st.header("Generate Research Paper")
+    with tab_generate:
+        st.header("Generate a Research Paper")
         topic = st.text_input("Enter your research paper topic:")
-        min_words = st.slider("Minimum words (approx)", 500, 5000, 1500, step=100)
+        min_words = st.slider("Minimum words", 1000, 8000, 3000, step=500)
         if st.button("Generate Paper"):
             if not topic.strip():
                 st.warning("Please enter a topic.")
             else:
                 with st.spinner("Generating research paper..."):
                     paper_text = generate_research_paper(topic, min_words)
-                    if paper_text:
-                        pdf_filename = f"{uuid.uuid4().hex}_research_paper.pdf"
-                        save_text_as_pdf(paper_text, pdf_filename)
-                        st.success("Paper generated!")
-                        st.download_button("Download PDF", data=open(pdf_filename, "rb").read(), file_name=pdf_filename)
+                    pdf_filename = "generated_research_paper.pdf"
+                    save_text_as_pdf(paper_text, pdf_filename)
+                    st.success("Paper generated!")
+                    st.download_button("Download PDF", data=open(pdf_filename, "rb").read(), file_name=pdf_filename)
 
     # --- Upload & Chat with PDF Tab ---
     with tab_chat:
-        st.header("Upload & Chat with PDF")
-        uploaded_files = st.file_uploader("Upload PDF/DOCX files", type=["pdf", "docx"], accept_multiple_files=True)
+        st.header("Upload PDFs/DOCs for Q&A")
+        uploaded_files = st.file_uploader("Upload PDF or DOCX files", type=["pdf","docx"], accept_multiple_files=True)
         if uploaded_files:
-            for file in uploaded_files:
-                if file.name not in st.session_state["processed_files"]:
-                    unique_filename = process_file(file)
+            for uploaded_file in uploaded_files:
+                if uploaded_file.name not in st.session_state["processed_files"]:
+                    unique_filename = process_file(uploaded_file)
                     if unique_filename:
-                        st.success(f"Processed: {file.name}")
-                        st.session_state["processed_files"][file.name] = unique_filename
+                        st.success(f"Uploaded: {uploaded_file.name}")
+                        st.session_state["processed_files"][uploaded_file.name] = unique_filename
                         save_processed_files(st.session_state["processed_files"])
 
         st.subheader("Ask a Question")
@@ -279,15 +253,23 @@ def main():
         if st.button("Get Answer"):
             if query:
                 search_results = search_documents(query)
-                if search_results:
-                    context = "\n\n".join([doc for _, doc, _ in search_results[:5]])
-                    answer = call_llm(context, query)
+                context = "\n\n".join([doc for _, doc, _ in search_results[:5]]) if search_results else ""
+                if context:
+                    # Use Google API for answering too
+                    answer_prompt = f"Answer based only on the context below. If not available, say 'No relevant information'.\n\nContext:\n{context}\n\nQuestion: {query}"
+                    try:
+                        response = genai.chat.create(
+                            model="gemini-1.5-turbo",
+                            messages=[{"role": "user", "content": answer_prompt}],
+                            temperature=0.3
+                        )
+                        answer = response.last
+                    except Exception as e:
+                        answer = f"Error: {e}"
                     st.write("**Answer:**")
                     st.write(answer)
                 else:
-                    st.warning("No relevant content found.")
-            else:
-                st.warning("Please enter a question.")
+                    st.warning("No relevant documents found.")
 
 if __name__ == "__main__":
     main()
