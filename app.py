@@ -188,7 +188,11 @@ def search_documents(query, top_k=5):
 
 # ---------- LLM Call ----------
 def call_llm(context, question):
-    api_key = st.secrets["OPENROUTER_API_KEY"]
+    api_key = st.secrets.get("OPENROUTER_API_KEY")
+    if not api_key:
+        st.error("OpenRouter API key is missing in secrets.toml")
+        return "API Key Missing"
+
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
