@@ -8,4 +8,5 @@ chromadb
 requests
 google-generativeai
 langchain
+langchain-google-genai
 faiss-cpu
