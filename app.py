@@ -205,7 +205,7 @@ def call_llm(context, question):
 
 # ---------- Research Paper Generator ----------
 def generate_research_paper(topic, min_words=1000):
-    api_key = st.secrets.get("OPENROUTER_API_KEY")
+    api_key = st.secrets.get("GOOGLE_API_KEY")
     if not api_key:
         st.error("OpenRouter API key not provided in secrets.")
         return "API Key Missing"
