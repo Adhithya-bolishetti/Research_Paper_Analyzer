@@ -14,8 +14,9 @@ from fpdf import FPDF
 from dotenv import load_dotenv
 
 load_dotenv()
-google_api_key = os.getenv("GOOGLE_API_KEY")
-genai.configure(api_key=google_api_key)
+# google_api_key = os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+# genai.configure(api_key=google_api_key)
 
 def generate_long_research_paper(topic: str, min_words=3000) -> str:
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.3)
@@ -55,9 +56,13 @@ def get_text_chunks(text):
     return chunks
 
 def get_vector_store(text_chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")  # local relative path
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(model="textembedding-gecko-001")
+        vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+        vector_store.save_local("faiss_index")
+    except Exception as e:
+        st.error(f"Error creating vector store: {e}")
+
 
 def get_conversational_chain():
     prompt_template = """
