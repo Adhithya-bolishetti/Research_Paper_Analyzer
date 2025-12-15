@@ -22,8 +22,7 @@ This project provides tools for generating, uploading, and analyzing research pa
 ├── requirements.txt
 └── RAG/
     ├── rag.py
-    └── .streamlit/
-        └── secrets.toml
+    
 ```
 
 ## Setup
