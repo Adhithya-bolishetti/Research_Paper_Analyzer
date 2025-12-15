@@ -21,8 +21,7 @@ This project provides tools for generating, uploading, and analyzing research pa
 ├── main.py
 ├── requirements.txt
 └── RAG/
-    ├── rag.py
-    
+    └── rag.py
 ```
 
 ## Setup
